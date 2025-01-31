@@ -57,8 +57,16 @@ bool MainWindow::Init() {
     if (Common::isRelease) {
         window_title = fmt::format("shadPS4 v{}", Common::VERSION);
     } else {
-        window_title = fmt::format("shadPS4 v{} {} {}", Common::VERSION, Common::g_scm_branch,
-                                   Common::g_scm_desc);
+        std::string remote_url(Common::g_scm_remote_url);
+        if (remote_url == "https://github.com/shadps4-emu/shadPS4.git" ||
+            remote_url.length() == 0) {
+            window_title = fmt::format("shadPS4 v{} {} {}", Common::VERSION, Common::g_scm_branch,
+                                       Common::g_scm_desc);
+        } else {
+            std::string remote_host = remote_url.substr(19, remote_url.rfind('/') - 19);
+            window_title = fmt::format("shadPS4 v{} {}/{} {}", Common::VERSION, remote_host,
+                                       Common::g_scm_branch, Common::g_scm_desc);
+        }
     }
     setWindowTitle(QString::fromStdString(window_title));
     this->show();
@@ -725,9 +733,20 @@ void MainWindow::InstallDragDropPkg(std::filesystem::path file, int pkgNum, int 
             return;
         }
         auto category = psf.GetString("CATEGORY");
-        InstallDirSelect ids;
-        ids.exec();
-        auto game_install_dir = ids.getSelectedDirectory();
+
+        if (!use_for_all_queued || pkgNum == 1) {
+            InstallDirSelect ids;
+            const auto selected = ids.exec();
+            if (selected == QDialog::Rejected) {
+                return;
+            }
+
+            last_install_dir = ids.getSelectedDirectory();
+            delete_file_on_install = ids.deleteFileOnInstall();
+            use_for_all_queued = ids.useForAllQueued();
+        }
+        std::filesystem::path game_install_dir = last_install_dir;
+
         auto game_folder_path = game_install_dir / pkg.GetTitleID();
         QString pkgType = QString::fromStdString(pkg.GetPkgFlags());
         bool use_game_update = pkgType.contains("PATCH") && Config::getSeparateUpdateEnabled();
@@ -879,8 +898,14 @@ void MainWindow::InstallDragDropPkg(std::filesystem::path file, int pkgNum, int 
                     if (pkgNum == nPkg) {
                         QString path;
                         Common::FS::PathToQString(path, game_install_dir);
+                        QIcon windowIcon(
+                            Common::FS::PathToUTF8String(game_folder_path / "sce_sys/icon0.png")
+                                .c_str());
                         QMessageBox extractMsgBox(this);
                         extractMsgBox.setWindowTitle(tr("Extraction Finished"));
+                        if (!windowIcon.isNull()) {
+                            extractMsgBox.setWindowIcon(windowIcon);
+                        }
                         extractMsgBox.setText(
                             QString(tr("Game successfully installed at %1")).arg(path));
                         extractMsgBox.addButton(QMessageBox::Ok);
@@ -893,6 +918,9 @@ void MainWindow::InstallDragDropPkg(std::filesystem::path file, int pkgNum, int 
                                     }
                                 });
                         extractMsgBox.exec();
+                    }
+                    if (delete_file_on_install) {
+                        std::filesystem::remove(file);
                     }
                 });
                 connect(&dialog, &QProgressDialog::canceled, [&]() { futureWatcher.cancel(); });
